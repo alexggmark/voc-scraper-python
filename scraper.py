@@ -1,83 +1,54 @@
+from selenium import webdriver
+from selenium.webdriver.common.by import By
+from selenium.webdriver.chrome.service import Service
+from selenium.common.exceptions import NoSuchElementException
 import csv
-import requests
-from bs4 import BeautifulSoup
-import re
 import time
-from tenacity import retry, stop_after_attempt, wait_fixed
 
-def generate_variations_of_url(base_url, total_pages, total_stars):
-    url_variations = []
-    for stars in range(1, total_stars + 1):
-        for page in range(1, total_pages + 1):
-            url = f"{base_url}?page={page}&stars={stars}"
-            url_variations.append(url)
-    return url_variations
+def scrape_reviews(page):
+    global review_count
+    url = f"https://www.capterra.co.uk/reviews/135106/fareharbor?page={page}" # CHANGE THIS URL 👈
 
-@retry(stop=stop_after_attempt(3), wait=wait_fixed(1))  # Retry up to 3 times with a 1-second delay between retries
-def fetch_page_content(url):
-    response = requests.get(url)
-    response.raise_for_status()  # Raise an exception if the response status code is not 200
-    return response.content
+    print(f"{url}")
 
-def scrape_page(url):
+    driver.get(url)
+    time.sleep(3)  # Adjust this delay as necessary
+
+    # Check if the URL has changed
+    if driver.current_url != url:
+        print(f"❌ Page does not exist or URL has changed: {url}")
+        return  # If the page does not exist or the URL has changed, we stop the function
+
     try:
-        content = fetch_page_content(url)
-        time.sleep(1)  # Add a 1-second delay to let dynamic elements load
-        soup = BeautifulSoup(content, 'html.parser')
-        title_elements = soup.select('[data-service-review-title-typography]')
-        text_elements = soup.select('[data-service-review-text-typography]')
-
-        if len(title_elements) != len(text_elements):
-            print(f"Error: The number of title elements doesn't match the number of text elements for URL: {url}")
-            return None
-
-        scraped_data = []
-        for title, text in zip(title_elements, text_elements):
-            title_text = title.get_text(strip=True)
-            text_text = text.get_text(strip=True)
-            scraped_data.append(f"{title_text} {text_text}")
-
-        return scraped_data
-    except requests.exceptions.HTTPError as e:
-        print(f"Error: Unable to fetch the page. Status code: {e.response.status_code} for URL: {url}")
-        return None
-    except requests.exceptions.RequestException as e:
-        print(f"Error: Request error occurred for URL: {url}. {e}")
-        return None
-
-def save_to_csv(data, url):
-    if not data:
+        review_containers = driver.find_elements(By.CSS_SELECTOR, ".i18n-translation_container .col-lg-7")
+        print("Element found! ✅")
+        print(f"Number of reviews found: {len(review_containers)}")
+    except NoSuchElementException:
+        print("No reviews found.")
         return
 
-    # Extract the domain name from the URL to use in the output file name
-    domain = re.findall(r"(https?://)(.*?)/", url)
-    if domain:
-        domain = domain[0][1].replace('.', '_')
-    else:
-        domain = 'unknown'
+    for review in review_containers:
+        title = review.find_element(By.CSS_SELECTOR, ".h5.fw-bold").get_attribute('innerHTML')
+        text_elements = review.find_elements(By.CSS_SELECTOR, "p")
+        review_text = ' '.join([text.get_attribute('innerHTML') for text in text_elements])
+        csv_writer.writerow([title, review_text, url])
+        review_count += 1  # increment the counter
 
-    # Create the output file name with the URL and current timestamp
-    filename = f"scraped_data_{domain}.csv"
-    with open(filename, 'a', newline='', encoding='utf-8') as file:  # Use 'a' for append mode
-        writer = csv.writer(file)
+# Initialize the webdriver
+driver = webdriver.Chrome(service=Service('/CHANGE_THIS_PATH/Chromedriver/chromedriver')) # CHANGE PATH 👈
 
-        # Check if the file is empty, if so, write the header row
-        if file.tell() == 0:
-            writer.writerow(['Text', 'URL'])
+# Open the csv file for writing
+with open('scraped_reviews.csv', 'w', newline='') as csvfile:
+    csv_writer = csv.writer(csvfile)
+    csv_writer.writerow(["Title", "Text", "URL of page scraped"])  # write header
 
-        for item in data:
-            writer.writerow([item, url])
+    review_count = 0  # Initialize the review counter
 
-if __name__ == "__main__":
-    base_url = "https://uk.trustpilot.com/review/bokun.io"
-    total_pages = 20
-    total_stars = 5
+    # Iterate over pages
+    for page in range(1, 46):  # increase the limit to 46 because range() function doesn't include the end
+        scrape_reviews(page)
+        print(f"Scrape: page - {page}")
+        print(f"Total reviews scraped: {review_count}")  # Print the total reviews scraped
 
-    url_variations = generate_variations_of_url(base_url, total_pages, total_stars)
-
-    for url in url_variations:
-        scraped_data = scrape_page(url)
-
-        if scraped_data:
-            save_to_csv(scraped_data, url)
-            print(f"Data has been scraped and appended to 'scraped_data_{url}.csv'.")
+# Close the webdriver
+driver.quit()
